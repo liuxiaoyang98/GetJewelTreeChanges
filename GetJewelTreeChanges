@@ -1,0 +1,165 @@
+
+                        GetJewelTreeChanges: (graphId: number, jewel: PoeEquipmentObject, jnMap:{[graphId:number]:any} = {}) => {
+                            let stats = statCalc.GetEquipmentRawStats(jewel);
+
+                            let atv = stats["local_unique_jewel_alternate_tree_version"] || -1;
+                            let ats = stats["local_unique_jewel_alternate_tree_seed"] || -1;
+                            let atk = stats["local_unique_jewel_alternate_tree_keystone"] || -1;
+                            let radius = stats["local_jewel_effect_base_radius"] || 1500;
+
+                            //Confirmed change
+                            if(atv > 0 && ats > 0 && atk > 0) {
+                                let graphEval = function(atVer:number, seed:number, keystone:number, radius:number) {
+                                    let atTreeVerEntry = atvData.atv[atVer];
+                                    let graphEval = function(graphId:number) {
+                                        self;
+                                        let psEntry = treeData.json.passives.find(function(f) { return f.graphId == graphId });
+                                        if(psEntry.isJewel && atv != 4) { //Only militant faith/templar can adjust jewel nodes
+                                            return;
+                                            //return null;
+                                        }
+
+                                        let nodeOut = {
+                                            id: psEntry.id,
+                                            replaced: false,
+                                            added: false,
+                                            name: psEntry.name,
+                                            image: psEntry.image,
+                                            stats: psEntry.stats,
+                                            addedStats: null,
+                                        };
+
+                                        let late = (window as any).late;
+                                        if(late < 195) {
+                                            wapi.getRange(graphId, seed);
+                                        }
+                                        else if(late < 166) {
+                                            wapi.nra(graphId, seed);
+                                        }
+                                        else {
+                                            wapi.sga(graphId, seed);
+                                        }
+
+                                        let nodeAddition = atTreeVerEntry.i3;
+                                        let replacePassive = !!atTreeVerEntry.b2;
+                                        let passiveType = 2;
+                                        if(psEntry.keystone) {
+                                            passiveType = 4;
+                                            replacePassive = true;
+                                        }
+                                        else if(psEntry.notable) {
+                                            passiveType = 3;
+
+                                            nodeAddition = atTreeVerEntry.i5;
+
+                                            //Evaluate chance of flipping; yes PRNG is checked even at 100
+                                            let morphTest = graphId > 5 ? wapi.hsb(0, 0x64) : wapi.genVal(0x64);
+                                            let morphChance = atTreeVerEntry.i7;
+                                            replacePassive = morphChance >= 100 || morphTest < morphChance;
+                                        }
+                                        else if(psEntry.stats.length == 1) {
+                                            //Make pathing nodes that are dex/strength/int convert
+                                            if(PATHING_STAT_KEYS[psEntry.stats[0].key] && psEntry.stats[0].value == 10) {
+                                                passiveType = 1;
+                                                replacePassive = !!atTreeVerEntry.b1;
+                                            }
+                                        }
+
+                                        if(replacePassive) {
+                                            let wt = GetApsWeightTable(atVer, passiveType);
+
+                                            let totalWeight = 0;
+                                            let selectedEntry:AltPassiveSkill = null;
+
+                                            if(passiveType == 4) {
+                                                selectedEntry = wt.list.find(function(f) { return f.kk == keystone });
+                                            }
+                                            else {
+                                                wt.list.forEach(function (aps) {
+                                                    totalWeight += aps.w;
+
+                                                    let test = wapi.enc(totalWeight);
+                                                    if (test < aps.w) {
+                                                        selectedEntry = aps;
+                                                    }
+                                                });
+                                            }
+
+                                            if(selectedEntry) {
+                                                nodeOut.id = selectedEntry.id;
+                                                nodeOut.name = selectedEntry.name;
+                                                nodeOut.replaced = true;
+                                                nodeOut.image = selectedEntry.img;
+                                                nodeOut.stats = selectedEntry.stats.map(function(so, idx) {
+                                                    if(so.min != so.max) {
+                                                        let rangeTest =  wapi.hsb(so.min, so.max);
+                                                        return {
+                                                            key: so.key,
+                                                            value: rangeTest
+                                                        };
+                                                    }
+                                                    return {
+                                                        key: so.key,
+                                                        value: so.min
+                                                    };
+                                                });
+                                            }
+                                        }
+                                        else if(nodeAddition) {
+                                            //I believe this checks number of additions to add
+                                            //let addCount = prng.getValueFromMinMax(0, 1);
+
+                                            let wt = GetApaWeightTable(atVer, passiveType);
+
+                                            let selectedEntry:AltPassiveAddition = null;
+                                            let weightTest = wapi.enc(wt.max);
+                                            wt.list.some(function(apa) {
+                                                if (weightTest < apa.w) {
+                                                    selectedEntry = apa;
+                                                    return true;
+                                                }
+                                                weightTest -= apa.w;
+                                            });
+
+                                            if(selectedEntry) {
+                                                nodeOut.added = true;
+                                                nodeOut.addedStats = selectedEntry.stats.map(function(so, idx) {
+                                                    if(so.min != so.max) {
+                                                        let rangeTest = wapi.hsb(so.min, so.max);
+                                                        return {
+                                                            key: so.key,
+                                                            value: rangeTest
+                                                        };
+                                                    }
+                                                    return {
+                                                        key: so.key,
+                                                        value: so.min
+                                                    };
+                                                });
+                                            }
+                                        }
+
+                                        if(nodeOut.added || nodeOut.replaced) {
+                                            return nodeOut;
+                                        }
+                                        return null;
+                                    };
+                                    treeData.json.jewelRadius.forEach(function(jg) {
+                                        //let graphOut = { id: jg.graphId, stats: [], nodes: [] };
+                                        //if(jg.graphId == 7960)
+                                        jg.radiusNodes.forEach(function(rn) {
+                                            //graphOut.nodes.push(graphId);
+                                            if (rn.distance <= radius && jnMap[rn.graphId] == undefined) {
+                                                let node = graphEval(rn.graphId);
+                                                jnMap[rn.graphId] = node;
+                                            }
+                                        });
+                                    });
+
+                                    return jnMap;
+                                };
+                                graphEval(atv, ats, atk, radius);
+                            }
+
+                            return jnMap;
+                        }
